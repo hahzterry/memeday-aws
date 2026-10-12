@@ -1,4 +1,4 @@
-const { test, beforeEach } = require("node:test");
+const { test, before, beforeEach } = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -123,43 +123,71 @@ async function callCron({ url = `${APP_URL}/api/cron/buffer-motd`, authorization
 // ---------------------------------------------------------------------------
 
 const LINK = "https://memeday.example/meme/abc";
-// Forces template i (0, 1 or 2) out of the three.
-const pick = (i) => () => (i + 0.5) / 3;
+const TAGS = "#memes #Solana";
+// Read from the module so adding a template never needs a change here.
+let templateCount;
+before(async () => {
+  templateCount = (await load("lib/buffer.ts")).POST_TEMPLATES.length;
+});
+// Forces template i (counting from 0) out of however many there are.
+const pick = (i) => () => (i + 0.5) / templateCount;
+const allTemplates = () => Array.from({ length: templateCount }, (_, i) => i);
 
 test("buffer text: each template fills in the caption and the link", async () => {
   const { buildPostText } = await load("lib/buffer.ts");
   assert.strictEqual(
     buildPostText("Stonks", LINK, pick(0)),
-    `Meme of the Day on MemeDay: "Stonks" Like it, tip the creator in SOL, or share it. ${LINK}`
+    `Meme of the Day on MemeDay: "Stonks" Like it, tip the creator in SOL, or share it. ${LINK} #memes #Solana`
   );
   assert.strictEqual(
     buildPostText("Stonks", LINK, pick(1)),
-    `"Stonks" is today's Meme of the Day. On MemeDay, creators get tipped in SOL directly from the feed. ${LINK}`
+    `"Stonks" is today's Meme of the Day. On MemeDay, creators get tipped in SOL directly from the feed. ${LINK} #memes #Solana`
   );
   assert.strictEqual(
     buildPostText("Stonks", LINK, pick(2)),
-    `Today's pick on MemeDay: "Stonks" Creators post, fans tip in SOL, and memes can be minted as NFTs. ${LINK}`
+    `Today's pick on MemeDay: "Stonks" Creators post, fans tip in SOL, and memes can be minted as NFTs. ${LINK} #memes #Solana`
   );
+  assert.strictEqual(
+    buildPostText("Stonks", LINK, pick(3)),
+    `Top meme on MemeDay today: "Stonks" Enjoy it? Send the creator a SOL tip. ${LINK} #memes #Solana`
+  );
+  assert.strictEqual(
+    buildPostText("Stonks", LINK, pick(4)),
+    `Daily meme drop from MemeDay: "Stonks" Post your own and earn SOL tips from fans. ${LINK} #memes #Solana`
+  );
+});
+
+test("buffer text: every post ends with the two hashtags and has the permalink exactly once", async () => {
+  const { buildPostText, POST_HASHTAGS } = await load("lib/buffer.ts");
+  assert.deepStrictEqual(POST_HASHTAGS, ["#memes", "#Solana"]);
+  for (const caption of ["Stonks", "", "a".repeat(400), "😂".repeat(300)]) {
+    for (const i of allTemplates()) {
+      const post = buildPostText(caption, PERMALINK, pick(i));
+      assert.ok(post.endsWith(" #memes #Solana"), post);
+      assert.strictEqual(post.split(PERMALINK).length - 1, 1, post);
+    }
+  }
 });
 
 test("buffer text: a caption with $ patterns or a literal {link} is inserted as written", async () => {
   const { buildPostText } = await load("lib/buffer.ts");
   const post = buildPostText("$& costs $1 {link}", LINK, pick(0));
   assert.ok(post.includes(`"$& costs $1 {link}"`), post);
-  assert.ok(post.endsWith(LINK));
+  assert.ok(post.endsWith(`${LINK} ${TAGS}`));
 });
 
 test("buffer text: a long caption is truncated to exactly 280 counted characters, link counted as 23", async () => {
   const { buildPostText, xCountedLength } = await load("lib/buffer.ts");
   // Far longer than 23, to prove the link's real length is not what is counted.
   const longLink = `https://memeday.example/meme/${"x".repeat(80)}`;
-  for (const i of [0, 1, 2]) {
+  for (const i of allTemplates()) {
     const post = buildPostText("a".repeat(400), longLink, pick(i));
-    assert.ok(post.endsWith(longLink), "link survives intact");
+    assert.ok(post.endsWith(` ${longLink} ${TAGS}`), "link and hashtags survive intact");
     assert.ok(post.includes(`a…"`), "caption ends in an ellipsis inside the quotes");
     // Counted by hand rather than with the module's own counter: everything
     // but the link is ASCII (1 each) except the ellipsis, which X counts as 2,
-    // hence the +1. Then the link at a flat 23.
+    // hence the +1. Then the link at a flat 23. The hashtags and their spaces
+    // are still in withoutLink, so they are part of the 280.
     const withoutLink = post.replace(longLink, "");
     assert.strictEqual(withoutLink.length + 1 + 23, 280);
     assert.strictEqual(xCountedLength(post, longLink), 280);
@@ -188,19 +216,27 @@ test("buffer text: an empty or whitespace caption leaves clean text with no quot
   const { buildPostText } = await load("lib/buffer.ts");
   assert.strictEqual(
     buildPostText("", LINK, pick(0)),
-    `Meme of the Day on MemeDay: Like it, tip the creator in SOL, or share it. ${LINK}`
+    `Meme of the Day on MemeDay: Like it, tip the creator in SOL, or share it. ${LINK} #memes #Solana`
   );
   assert.strictEqual(
     buildPostText("", LINK, pick(2)),
-    `Today's pick on MemeDay: Creators post, fans tip in SOL, and memes can be minted as NFTs. ${LINK}`
+    `Today's pick on MemeDay: Creators post, fans tip in SOL, and memes can be minted as NFTs. ${LINK} #memes #Solana`
+  );
+  assert.strictEqual(
+    buildPostText("", LINK, pick(3)),
+    `Top meme on MemeDay today: Enjoy it? Send the creator a SOL tip. ${LINK} #memes #Solana`
+  );
+  assert.strictEqual(
+    buildPostText("", LINK, pick(4)),
+    `Daily meme drop from MemeDay: Post your own and earn SOL tips from fans. ${LINK} #memes #Solana`
   );
   for (const caption of ["", "   ", "\n\t "]) {
-    for (const i of [0, 1, 2]) {
+    for (const i of allTemplates()) {
       const post = buildPostText(caption, LINK, pick(i));
       assert.ok(!post.includes('"'), post);
       assert.ok(!post.includes("  "), post);
       assert.strictEqual(post, post.trim());
-      assert.ok(post.endsWith(` ${LINK}`), post);
+      assert.ok(post.endsWith(` ${LINK} ${TAGS}`), post);
     }
   }
 });

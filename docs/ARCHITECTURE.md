@@ -589,9 +589,12 @@ Buffer GraphQL API (`https://api.buffer.com`). Code: `vercel.json`,
   There is no duplicate-run lock and no missed-run recovery.
 - No DynamoDB reads beyond `getMemeOfDay()`, no writes, no new item types, no
   GSI, no CDK or IAM change.
-- Post text: one of three fixed templates picked at random, caption truncated
-  with an ellipsis so the post is at most 280 characters as X counts them (any
-  URL is 23; emoji, CJK and the ellipsis itself are 2).
+- Post text: one of five fixed templates picked at random, then the permalink,
+  then the two hashtags `#memes #Solana` (`POST_HASHTAGS`, kept to two because
+  X recommends at most 2 per post). The caption is truncated with an ellipsis
+  so the whole post, hashtags and their spaces included, is at most 280
+  characters as X counts them (any URL is 23; emoji, CJK and the ellipsis
+  itself are 2). Only the caption is ever shortened.
 - Rate limits: on HTTP 429 the route does not retry. It logs the `Retry-After`
   value and reports that channel as `error`.
 - Env vars, all three server-only (never `NEXT_PUBLIC_`), set in Vercel

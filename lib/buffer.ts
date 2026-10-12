@@ -18,7 +18,13 @@ export const POST_TEMPLATES = [
   `Meme of the Day on MemeDay: "{caption}" Like it, tip the creator in SOL, or share it. {link}`,
   `"{caption}" is today's Meme of the Day. On MemeDay, creators get tipped in SOL directly from the feed. {link}`,
   `Today's pick on MemeDay: "{caption}" Creators post, fans tip in SOL, and memes can be minted as NFTs. {link}`,
+  `Top meme on MemeDay today: "{caption}" Enjoy it? Send the creator a SOL tip. {link}`,
+  `Daily meme drop from MemeDay: "{caption}" Post your own and earn SOL tips from fans. {link}`,
 ];
+
+// Added to the end of every post, after the link. Kept to two because X
+// recommends at most 2 hashtags per post.
+export const POST_HASHTAGS = ["#memes", "#Solana"];
 
 // X does not count plain string length. Latin text and common punctuation
 // cost 1 each; everything else (emoji, CJK, and also the ellipsis character)
@@ -62,7 +68,9 @@ export function buildPostText(
   link: string,
   random: () => number = Math.random
 ): string {
-  const template = POST_TEMPLATES[Math.floor(random() * POST_TEMPLATES.length)];
+  // The hashtags are joined onto the template before anything is measured, so
+  // the 280 budget below pays for them and only the caption is ever shortened.
+  const template = `${POST_TEMPLATES[Math.floor(random() * POST_TEMPLATES.length)]} ${POST_HASHTAGS.join(" ")}`;
   const clean = caption.trim();
 
   if (!clean) {
