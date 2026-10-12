@@ -41,6 +41,7 @@ Vercel serverless (Next.js API routes) handle all synchronous work:
 | `/api/bags/verify` | Verifies a claimed Bags launch (creatorship + partner attribution) on mainnet, or returns a simulated result off it, and stores the outcome either way |
 | `/api/bags/my-token` | Returns the caller's verified Bags token, if any — drives launch-button-vs-token-card in the UI |
 | `/api/points/me` | Authenticated. Returns the caller's current weekly and all-time points totals (KAN-101) |
+| `/api/cron/buffer-motd` | Vercel Cron target (KAN-84). Queues the Meme of the Day to X through Buffer. `CRON_SECRET` bearer auth, not Cognito. See Buffer (X promotion) below |
 
 AWS Lambda handles event-driven and privileged work. Exactly three functions
 exist, all defined in `infra/lib/memeday-stack.ts`:
@@ -52,6 +53,11 @@ exist, all defined in `infra/lib/memeday-stack.ts`:
 | `ModerationHandler` | Direct async invoke from `S3Handler` (`InvocationType: "Event"`) | Rekognition content moderation |
 
 There is NO EventBridge / cron-triggered Lambda in the stack today. PLANNED.
+
+One scheduled job does exist, but it is a Vercel Cron, not a Lambda (KAN-84):
+`vercel.json` declares a single cron, `0 8 * * *` (UTC), that calls
+`GET /api/cron/buffer-motd`. Vercel makes that request to the project's
+production deployment URL. It needs no CDK, IAM or trigger of its own.
 
 No Lambda performs on-chain signing today. There is no server-side signer in
 the repo; every Solana transaction is signed client-side by the user's wallet.
@@ -548,6 +554,55 @@ afterwards.
   it today. In prod every earner has a `USER#` item and every source item has
   `createdAt`, so a nonzero value there means a real user silently lost
   points. A skipped `LEADERBOARD#GLOBAL` increment emits nothing of its own.
+
+## Buffer (X promotion) (KAN-84)
+
+A daily Vercel Cron queues the Meme of the Day to two X channels through the
+Buffer GraphQL API (`https://api.buffer.com`). Code: `vercel.json`,
+`app/api/cron/buffer-motd/route.ts`, `lib/buffer.ts` (server-only).
+
+- Queue-only. The route creates each post with `mode: addToQueue` and
+  `schedulingType: automatic`, so Buffer publishes it at that channel's next
+  queue slot (12:00 Europe/Ljubljana, configured in the Buffer UI, not in this
+  repo). It never uses `shareNow` or a custom `dueAt`. The cron time (08:00
+  UTC) only has to be earlier than the slot.
+- Source: `getMemeOfDay()` in `lib/db.ts`, unchanged. No meme means a logged
+  200 with `result: "no_meme"`.
+- Same post on every channel in `BUFFER_CHANNEL_IDS`. Each channel is handled
+  on its own: one failing does not stop the other. The response lists a
+  per-channel result (`queued`, `skipped_same_meme`, `error`) and is HTTP 500
+  if any channel errored or if the run could not start (see the two bullets
+  below), 200 otherwise.
+- Image: only an absolute `https://` `imageUrl` (the CloudFront URL) is sent.
+  Buffer downloads the image at publish time, hours later, so a relative
+  `/api/image/...` path (`CLOUDFRONT_DOMAIN` unset) or any expiring URL would
+  fail. In that case the route logs an error and queues nothing.
+- Permalink: `<base>/meme/<id>`, base from `metadataBaseUrl()` in
+  `lib/metadata-url.ts` (`NEXT_PUBLIC_APP_URL` when usable, else the request
+  host). A base that is not `https://` logs an error and queues nothing.
+- Dedup via Buffer post history, no DB state. Before queueing, the route reads
+  that channel's most recently created post (statuses `sent` and `scheduled`)
+  and skips the channel if its text already contains this meme's permalink.
+  This is what stops the same top meme being posted on consecutive days, and
+  what makes a second run on the same day a no-op. It depends on Buffer
+  storing the link as written: link shortening must be OFF on both channels.
+  There is no duplicate-run lock and no missed-run recovery.
+- No DynamoDB reads beyond `getMemeOfDay()`, no writes, no new item types, no
+  GSI, no CDK or IAM change.
+- Post text: one of three fixed templates picked at random, caption truncated
+  with an ellipsis so the post is at most 280 characters as X counts them (any
+  URL is 23; emoji, CJK and the ellipsis itself are 2).
+- Rate limits: on HTTP 429 the route does not retry. It logs the `Retry-After`
+  value and reports that channel as `error`.
+- Env vars, all three server-only (never `NEXT_PUBLIC_`), set in Vercel
+  Production:
+  - `BUFFER_API_KEY`: Buffer API key, sent as a bearer token.
+  - `BUFFER_CHANNEL_IDS`: comma-separated Buffer channel IDs.
+  - `CRON_SECRET`: Vercel sends it as `Authorization: Bearer <CRON_SECRET>` on
+    cron calls. The route compares it in constant time and returns 401 on any
+    mismatch, and also when the variable is unset or empty (fail closed).
+  The Buffer organization ID the posts query needs is looked up from the
+  channel at runtime, not configured.
 
 ## Observability
 
